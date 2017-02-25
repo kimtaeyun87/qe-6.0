@@ -97,8 +97,9 @@ SUBROUTINE potinit()
         ! ... 'force theorem' calculation of MAE: read rho only from previous
         ! ... lsda calculation, set noncolinear magnetization from angles
         !
-        CALL read_rho ( rho%of_r, 2 )
+        CALL read_rho ( rho, 2 )
         CALL nc_magnetization_from_lsda ( dfftp%nnr, nspin, rho%of_r )
+        IF (lda_plus_u .and. noncolin) CALL ns_nc_from_lsda ()
      END IF
      !
      IF ( lscf ) THEN
@@ -301,3 +302,56 @@ SUBROUTINE nc_magnetization_from_lsda ( nnr, nspin, rho )
   RETURN
   !
 END SUBROUTINE nc_magnetization_from_lsda
+!
+!-------------
+SUBROUTINE ns_nc_from_lsda
+   ! 
+   USE kinds,            ONLY : DP
+   USE ions_base,        ONLY : nat, ityp
+   USE lsda_mod,         ONLY : nspin, starting_magnetization
+   USE ldaU,             ONLY : hubbard_u, hubbard_l
+   USE noncollin_module, ONLY : angle1, angle2 
+   USE scf,              ONLY : rho
+   USE uspp_param,       ONLY : upf
+   !
+   implicit none
+
+   real(DP) :: totoc, cosin 
+   real(DP), external :: hubbard_occ
+   complex(DP) :: esin, n, m, ns(4)  
+
+   integer :: ldim, na, nt, is, m1, m2, majs, isym, mins
+   logical :: nm        ! true if the atom is non magnetic
+
+   do na = 1, nat
+      nt = ityp (na)
+      if (Hubbard_U(nt).ne.0.d0) then
+         ldim = 2*Hubbard_l(nt)+1 
+!-- parameters for rotating occ. matrix
+         cosin   = COS(angle1(nt)) 
+         esin    = ( COS(angle2(nt)) + (0.d0,1.d0)*SIN(angle2(nt)) ) * SIN(angle1(nt))  
+
+!-- charge and moment
+         n =  ns(1) + ns(2) 
+         m =  ns(1) - ns(2)  
+
+!-- rotating occ. matrix
+         do m1 = 1, ldim
+            do m2 = 1, ldim
+               ns(1) = rho%ns_nc (m1, m2, 1, na)
+               ns(2) = rho%ns_nc (m1, m2, 2, na)
+
+               n = ns(1) + ns(2)
+               m = ns(1) - ns(2)
+                  
+               rho%ns_nc(m1, m2, 1, na) = ( n + m*cosin ) / 2.d0 
+               rho%ns_nc(m1, m2, 2, na) = m * esin / 2.d0
+               rho%ns_nc(m1, m2, 3, na) = m * CONJG( esin ) / 2.d0 
+               rho%ns_nc(m1, m2, 4, na) = ( n - m*cosin ) / 2.d0 
+            enddo
+         enddo
+      endif  
+   enddo  
+
+   return  
+END SUBROUTINE ns_nc_from_lsda
