@@ -1,3 +1,7 @@
+*.a
+*.o
+*.x
+*.mod
 include/c_defs.h
 include/configure.h
 include/fft_defs.h
@@ -7,3 +11,8 @@ install/configure.msg
 install/make_lapack.inc
 install/make_wannier90.inc
 make.inc
+Modules/version.f90
+S3DE
+bin
+iotk
+
