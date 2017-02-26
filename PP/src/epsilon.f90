@@ -26,9 +26,9 @@
   !
 CONTAINS
 
-!---------------------------------------------
+!----------------------------------------------------------
   SUBROUTINE grid_build(nw_, wmax_, wmin_, metalcalc, lsym)
-  !-------------------------------------------
+  !--------------------------------------------------------
   !
   USE kinds,     ONLY : DP
   USE io_global, ONLY : stdout, ionode
@@ -174,9 +174,9 @@ PROGRAM epsilon
   INTEGER                 :: nw,nbndmin,nbndmax
   REAL(DP)                :: intersmear,intrasmear,wmax,wmin,shift
   CHARACTER(10)           :: calculation,smeartype
-  LOGICAL                 :: metalcalc,lsym
+  LOGICAL                 :: metalcalc,lsym,lnonlocal
   !
-  NAMELIST / inputpp / prefix, outdir, calculation, lsym
+  NAMELIST / inputpp / prefix, outdir, calculation, lsym, lnonlocal
   NAMELIST / energy_grid / smeartype, intersmear, intrasmear, nw, wmax, wmin, &
                            nbndmin, nbndmax, shift
   !
@@ -211,7 +211,7 @@ PROGRAM epsilon
   intrasmear   = 0.0d0
   metalcalc    = .FALSE.
   lsym         = .FALSE.
-
+  lnonlocal    = .FALSE.
   !
   ! this routine allows the user to redirect the input using -input
   ! instead of <
@@ -257,6 +257,7 @@ PROGRAM epsilon
   CALL mp_bcast( nbndmin, ionode_id, world_comm )
   CALL mp_bcast( nbndmax, ionode_id, world_comm )
   CALL mp_bcast( lsym, ionode_id, world_comm )
+  CALL mp_bcast( lnonlocal, ionode_id, world_comm )
 
   !
   ! read PW simulation parameters from prefix.save/data-file.xml
@@ -297,7 +298,7 @@ PROGRAM epsilon
   !
   CASE ( 'eps' )
       !
-      CALL eps_calc ( intersmear, intrasmear, nbndmin, nbndmax, shift, metalcalc, nspin, lsym )
+      CALL eps_calc ( intersmear, intrasmear, nbndmin, nbndmax, shift, metalcalc, nspin, lsym, lnonlocal )
       !
   CASE ( 'jdos' )
       !
@@ -332,7 +333,7 @@ END PROGRAM epsilon
 
 
 !-----------------------------------------------------------------------------
-SUBROUTINE eps_calc ( intersmear,intrasmear, nbndmin, nbndmax, shift, metalcalc , nspin, lsym )
+SUBROUTINE eps_calc ( intersmear,intrasmear, nbndmin, nbndmax, shift, metalcalc , nspin, lsym, lnonlocal )
   !-----------------------------------------------------------------------------
   !
   USE kinds,                ONLY : DP
@@ -354,7 +355,7 @@ SUBROUTINE eps_calc ( intersmear,intrasmear, nbndmin, nbndmax, shift, metalcalc 
   !
   INTEGER,         INTENT(in) :: nbndmin, nbndmax, nspin
   REAL(DP),        INTENT(in) :: intersmear, intrasmear, shift
-  LOGICAL,         INTENT(in) :: metalcalc, lsym
+  LOGICAL,         INTENT(in) :: metalcalc, lsym, lnonlocal
   !
   ! local variables
   !
@@ -404,7 +405,11 @@ SUBROUTINE eps_calc ( intersmear,intrasmear, nbndmin, nbndmax, shift, metalcalc 
         !                           compute dipole matrix 3 x nbnd x nbnd parallel over g
         !                           recover g parallelism getting the total dipole matrix
         !
-        CALL dipole_calc( ik, dipole_aux, metalcalc , nbndmin, nbndmax)
+        IF ( .not. lnonlocal) THEN
+            CALL dipole_calc( ik, dipole_aux, metalcalc , nbndmin, nbndmax )
+        ELSE
+            CALL dipole_calc_nl( ik, dipole_aux, metalcalc, nbndmin, nbndmax ) 
+        END IF
         !
         IF ( lsym ) THEN
             CALL dipole_symmetrize( ik, dipole_aux, dipole )
@@ -1259,3 +1264,123 @@ SUBROUTINE dipole_symmetrize (ik, dipole_aux, dipole)
   !
 END SUBROUTINE dipole_symmetrize
 
+
+!-----------------------------------------------------------------------
+SUBROUTINE dipole_calc_nl( ik, dipole_aux, metalcalc, nbndmin, nbndmax )
+  !---------------------------------------------------------------------
+  !
+  USE kinds,                ONLY : DP
+  USE wvfct,                ONLY : nbnd, npwx
+  USE wavefunctions_module, ONLY : evc
+  USE klist,                ONLY : xk, ngk, igk_k, wk
+  USE gvect,                ONLY : ngm, g
+  USE io_files,             ONLY : nwordwfc, iunwfc
+  USE grid_module,          ONLY : focc, full_occ
+  USE mp_global,            ONLY : intra_bgrp_comm
+  USE mp,                   ONLY : mp_sum
+  !
+  USE uspp,                 ONLY : nkb, vkb, okvan
+  USE becmod,               ONLY : becp, calbec, allocate_bec_type, deallocate_bec_type
+  USE noncollin_module,     ONLY : npol, noncolin
+  USE cell_base,            ONLY : tpiba
+  USE lsda_mod,             ONLY : nspin, isk
+  !
+  IMPLICIT NONE
+  !
+  ! global variables
+  INTEGER,     INTENT(IN)     :: ik,nbndmin,nbndmax
+  LOGICAL,     INTENT(IN)     :: metalcalc
+  COMPLEX(DP), INTENT(INOUT)  :: dipole_aux(3,nbnd,nbnd)
+  !
+  ! local variables
+  INTEGER                     :: iband1, iband2, ig, npw, ipol, current_spin
+  COMPLEX(DP)                 :: caux
+  COMPLEX(DP), ALLOCATABLE    :: ppsi(:,:), ppsi_us(:,:)
+  !
+  ! Routine Body
+  !
+  CALL start_clock( 'dipole_calc_nl' )
+  !
+  ! read wfc for the given kpt
+  !
+  CALL davcio (evc, 2*nwordwfc, iunwfc, ik, - 1)
+  !
+  CALL allocate_bec_type(nkb, nbnd, becp)
+  !
+  ! compute dipole matrix elements
+  !
+  dipole_aux(:,:,:) = ( 0.0_DP, 0.0_DP )
+  !
+  npw = ngk(ik)
+  !
+  ALLOCATE(ppsi(npwx*npol,nbnd))
+  IF ( okvan ) CALL errore('dipole_calc_nl','USPP are not implemented',1)
+  !
+  CALL init_us_2 (npw, igk_k(1,ik), xk(1,ik), vkb)
+  !
+  CALL calbec (npw, vkb, evc, becp, nbnd)
+  !
+  DO ipol=1,3
+    !
+    IF (nspin == 2) THEN
+        current_spin = isk(ik)
+        CALL compute_ppsi(ppsi, ppsi_us, ik, ipol, nbnd, current_spin)
+    ELSE
+        CALL compute_ppsi(ppsi, ppsi_us, ik, ipol, nbnd, 1)
+    END IF
+    !
+    DO iband2 = nbndmin,nbndmax
+      !
+      IF ( focc(iband2,ik) <  full_occ) THEN
+        DO iband1 = nbndmin,nbndmax
+          IF ( iband1==iband2 ) CYCLE
+          !
+          IF ( focc(iband1,ik) >= 0.5e-4*full_occ ) THEN
+            DO ig = 1, npw
+              dipole_aux(ipol,iband1,iband2) = dipole_aux(ipol,iband1,iband2) +&
+                                             & conjg(evc(ig,iband1))*ppsi(ig,iband2)/tpiba
+              !
+              ! Non collinear case
+              !
+              IF ( noncolin ) THEN
+                dipole_aux(ipol,iband1,iband2) = dipole_aux(ipol,iband1,iband2) +&
+                                               & conjg(evc(ig+npwx,iband1))*ppsi(ig+npwx,iband2)/tpiba
+              ENDIF
+            ENDDO
+          ENDIF
+        ENDDO
+      ENDIF
+    ENDDO
+    !
+    ! The diagonal terms are taken into account only if the system is treated like a metal, not
+    ! in the intraband therm. Because of this we can recalculate the diagonal component of the dipole
+    ! tensor directly as we need it for the intraband term, without interference with interband one.
+    !
+    IF (metalcalc) THEN
+      DO iband1 = nbndmin,nbndmax
+        DO ig = 1, npw
+          dipole_aux(ipol,iband1,iband1) = dipole_aux(ipol,iband1,iband1) +&
+                                         & conjg(evc(ig,iband1))*ppsi(ig,iband1)/tpiba
+          !
+          ! Non collinear case
+          !
+          IF ( noncolin ) THEN
+            dipole_aux(ipol,iband1,iband1) = dipole_aux(ipol,iband1,iband1) +&
+                                           & conjg(evc(ig+npwx,iband1))*ppsi(ig+npwx,iband1)/tpiba
+          ENDIF
+        ENDDO
+      ENDDO
+    ENDIF
+  ENDDO
+  !
+  DEALLOCATE(ppsi)
+  !
+  ! recover over G parallelization (intra_bgrp)
+  !
+  CALL mp_sum( dipole_aux, intra_bgrp_comm )
+  !
+  CALL deallocate_bec_type(becp)
+  !
+  CALL stop_clock( 'dipole_calc_nl' )
+  !
+END SUBROUTINE dipole_calc_nl
