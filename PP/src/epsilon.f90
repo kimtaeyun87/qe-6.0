@@ -78,15 +78,6 @@ CONTAINS
   IF (ierr/=0) CALL errore('grid_build','allocating wgrid', abs(ierr))
 
   !
-  ! check on k point weights, no symmetry operations are allowed
-  !
-  DO ik = 2, nks
-     !
-     IF ( abs( wk(1) - wk(ik) ) > 1.0d-8 ) &
-        CALL errore('grid_build','non unifrom kpt grid', ik )
-     !
-  ENDDO
-  !
   ! occupation numbers, to be normalized differently
   ! whether we are spin resolved or not
   !
