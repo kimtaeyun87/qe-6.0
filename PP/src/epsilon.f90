@@ -171,9 +171,9 @@ PROGRAM epsilon
   INTEGER                 :: nw,nbndmin,nbndmax
   REAL(DP)                :: intersmear,intrasmear,wmax,wmin,shift
   CHARACTER(10)           :: calculation,smeartype
-  LOGICAL                 :: metalcalc
+  LOGICAL                 :: metalcalc,lsym
   !
-  NAMELIST / inputpp / prefix, outdir, calculation
+  NAMELIST / inputpp / prefix, outdir, calculation, lsym
   NAMELIST / energy_grid / smeartype, intersmear, intrasmear, nw, wmax, wmin, &
                            nbndmin, nbndmax, shift
   !
@@ -207,6 +207,7 @@ PROGRAM epsilon
   smeartype    = 'gauss'
   intrasmear   = 0.0d0
   metalcalc    = .FALSE.
+  lsym         = .TRUE.
 
   !
   ! this routine allows the user to redirect the input using -input
@@ -252,6 +253,7 @@ PROGRAM epsilon
   CALL mp_bcast( nw, ionode_id, world_comm )
   CALL mp_bcast( nbndmin, ionode_id, world_comm )
   CALL mp_bcast( nbndmax, ionode_id, world_comm )
+  CALL mp_bcast( lsym, ionode_id, world_comm )
 
   !
   ! read PW simulation parameters from prefix.save/data-file.xml
@@ -292,7 +294,7 @@ PROGRAM epsilon
   !
   CASE ( 'eps' )
       !
-      CALL eps_calc ( intersmear, intrasmear, nbndmin, nbndmax, shift, metalcalc, nspin )
+      CALL eps_calc ( intersmear, intrasmear, nbndmin, nbndmax, shift, metalcalc, nspin, lsym )
       !
   CASE ( 'jdos' )
       !
@@ -327,7 +329,7 @@ END PROGRAM epsilon
 
 
 !-----------------------------------------------------------------------------
-SUBROUTINE eps_calc ( intersmear,intrasmear, nbndmin, nbndmax, shift, metalcalc , nspin)
+SUBROUTINE eps_calc ( intersmear,intrasmear, nbndmin, nbndmax, shift, metalcalc , nspin, lsym )
   !-----------------------------------------------------------------------------
   !
   USE kinds,                ONLY : DP
@@ -349,7 +351,7 @@ SUBROUTINE eps_calc ( intersmear,intrasmear, nbndmin, nbndmax, shift, metalcalc 
   !
   INTEGER,         INTENT(in) :: nbndmin, nbndmax, nspin
   REAL(DP),        INTENT(in) :: intersmear, intrasmear, shift
-  LOGICAL,         INTENT(in) :: metalcalc
+  LOGICAL,         INTENT(in) :: metalcalc, lsym
   !
   ! local variables
   !
@@ -401,7 +403,11 @@ SUBROUTINE eps_calc ( intersmear,intrasmear, nbndmin, nbndmax, shift, metalcalc 
         !
         CALL dipole_calc( ik, dipole_aux, metalcalc , nbndmin, nbndmax)
         !
-        dipole(:,:,:)= tpiba2 * REAL( dipole_aux(:,:,:) * conjg(dipole_aux(:,:,:)), DP )
+        IF ( lsym ) THEN
+            CALL dipole_symmetrize( ik, dipole_aux, dipole )
+        ELSE
+            dipole(:,:,:)= tpiba2 * REAL( dipole_aux(:,:,:) * conjg(dipole_aux(:,:,:)), DP )
+        END IF
 
         !
         ! Calculation of real and immaginary parts
@@ -1194,4 +1200,53 @@ SUBROUTINE eps_writetofile(namein,desc,nw,wgrid,ncol,var)
   CLOSE(40)
   !
 END SUBROUTINE eps_writetofile
+
+
+SUBROUTINE dipole_symmetrize (ik, dipole_aux, dipole)
+  !
+  USE kinds,                ONLY : DP
+  USE klist,                ONLY : wk
+  USE wvfct,                ONLY : nbnd
+  USE cell_base,            ONLY : at, bg, tpiba2
+  USE symm_base,            ONLY : s, nsym
+
+  IMPLICIT NONE
+
+  INTEGER,        INTENT(IN)      :: ik
+  COMPLEX(DP),    INTENT(INOUT)   :: dipole_aux(3,nbnd,nbnd)
+  REAL(DP),       INTENT(INOUT)   :: dipole(3,nbnd,nbnd)
+  !
+  INTEGER     :: iband1, iband2, isym
+  COMPLEX(DP) :: aux(3), dipole_rot(3), saux(3)
+
+  dipole(:,:,:) = 0.0_DP
+  !
+  DO iband2 = 1, nbnd
+    DO iband1 = 1, nbnd
+      !
+      ! bring dipole moment to crystal axis
+      !
+      aux(:) = dipole_aux(1,iband1,iband2) * at(1,:) + &
+               dipole_aux(2,iband1,iband2) * at(2,:) + &
+               dipole_aux(3,iband1,iband2) * at(3,:)
+      !
+      DO isym = 1, nsym
+        saux(:) = s ( :, 1, isym ) * aux(1) + &
+                  s ( :, 2, isym ) * aux(2) + &
+                  s ( :, 3, isym ) * aux(3) 
+        !
+        ! bring back to cartesian axis
+        !
+        dipole_rot(:) = saux(1) * bg(:,1) + &
+                        saux(2) * bg(:,2) + &
+                        saux(3) * bg(:,3)
+        !
+        dipole(:,iband1,iband2) = dipole(:,iband1,iband2) + &
+                                  REAL(dipole_rot(:)*conjg(dipole_rot(:)), DP ) / &
+                                  REAL(nsym, DP) * wk(ik) * tpiba2
+      ENDDO
+    ENDDO
+  ENDDO
+  !
+END SUBROUTINE dipole_symmetrize
 
