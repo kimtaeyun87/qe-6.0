@@ -27,7 +27,7 @@
 CONTAINS
 
 !---------------------------------------------
-  SUBROUTINE grid_build(nw_, wmax_, wmin_, metalcalc)
+  SUBROUTINE grid_build(nw_, wmax_, wmin_, metalcalc, lsym)
   !-------------------------------------------
   !
   USE kinds,     ONLY : DP
@@ -42,7 +42,7 @@ CONTAINS
   ! input vars
   INTEGER,  INTENT(IN) :: nw_
   REAL(DP), INTENT(IN) :: wmax_ ,wmin_
-  LOGICAL,  OPTIONAL, INTENT(IN) :: metalcalc
+  LOGICAL,  OPTIONAL, INTENT(IN) :: metalcalc, lsym
   !
   ! local vars
   INTEGER         :: iw,ik,i,ierr
@@ -76,6 +76,18 @@ CONTAINS
   !
   ALLOCATE( wgrid( nw ), STAT=ierr )
   IF (ierr/=0) CALL errore('grid_build','allocating wgrid', abs(ierr))
+
+  !
+  ! check on k point weights, no symmetry operations are allowed
+  !
+  IF ( .not. lsym ) THEN
+     DO ik = 2, nks
+        !
+        IF ( abs( wk(1) - wk(ik) ) > 1.0d-8 ) &
+           CALL errore('grid_build','non unifrom kpt grid', ik )
+        !
+     ENDDO
+  END IF
 
   !
   ! occupation numbers, to be normalized differently
@@ -198,7 +210,7 @@ PROGRAM epsilon
   smeartype    = 'gauss'
   intrasmear   = 0.0d0
   metalcalc    = .FALSE.
-  lsym         = .TRUE.
+  lsym         = .FALSE.
 
   !
   ! this routine allows the user to redirect the input using -input
@@ -273,7 +285,7 @@ PROGRAM epsilon
   ! perform some consistency checks, 
   ! setup w-grid and occupation numbers
   !
-  CALL grid_build(nw, wmax, wmin, metalcalc)
+  CALL grid_build(nw, wmax, wmin, metalcalc, lsym)
 
 
   !
@@ -475,8 +487,14 @@ SUBROUTINE eps_calc ( intersmear,intrasmear, nbndmin, nbndmax, shift, metalcalc 
     !
     ! impose the correct normalization
     !
-    IF ( nspin == 1 .OR. nspin == 4) const =  64.0d0 * PI / ( omega * REAL(nkstot, DP) )
-    IF ( nspin == 2)                 const = 128.0d0 * PI / ( omega * REAL(nkstot, DP) )
+    IF ( .not. lsym ) THEN
+       IF ( nspin == 1 .OR. nspin == 4) const =  64.0d0 * PI / ( omega * REAL(nkstot, DP) )
+       IF ( nspin == 2)                 const = 128.0d0 * PI / ( omega * REAL(nkstot, DP) )
+    ELSE
+       IF ( nspin == 1) const =  64.0d0 * PI / ( omega * 2.0_DP )
+       IF ( nspin == 2) const = 128.0d0 * PI / ( omega * 2.0_DP )
+       IF ( nspin == 4) const = 128.0d0 * PI / ( omega * 2.0_DP )
+    END IF
     !
     epsr(:,:) = 1.0_DP + epsr(:,:) * const
     epsi(:,:) =          epsi(:,:) * const
