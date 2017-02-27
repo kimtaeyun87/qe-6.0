@@ -13,6 +13,7 @@ add_shift_cc.o \
 add_shift_lc.o \
 add_shift_us.o \
 atomic_wfc_nc_proj.o \
+atomic_wfc_nsdiago.o \
 cft.o \
 chdens.o \
 chdens_bspline.o \

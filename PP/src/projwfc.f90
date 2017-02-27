@@ -40,7 +40,7 @@ PROGRAM do_projwfc
   REAL (DP)      :: Emin, Emax, DeltaE, degauss1, ef_0
   INTEGER :: ngauss1, ios
   LOGICAL :: lwrite_overlaps, lbinary_data
-  LOGICAL :: lsym, kresolveddos, tdosinboxes, plotboxes, pawproj
+  LOGICAL :: lsym, kresolveddos, tdosinboxes, plotboxes, pawproj, lnsdiago
   INTEGER, PARAMETER :: N_MAX_BOXES = 999
   INTEGER :: n_proj_boxes, irmin(3,N_MAX_BOXES), irmax(3,N_MAX_BOXES)
   LOGICAL :: lgww  !if .true. use GW QP energies from file bands.dat
@@ -48,7 +48,7 @@ PROGRAM do_projwfc
   NAMELIST / projwfc / outdir, prefix, ngauss, degauss, lsym, &
              Emin, Emax, DeltaE, filpdos, filproj, lgww, &
              kresolveddos, tdosinboxes, n_proj_boxes, irmin, irmax, plotboxes, &
-             lwrite_overlaps, lbinary_data, pawproj, lforcet, ef_0
+             lwrite_overlaps, lbinary_data, pawproj, lforcet, ef_0, lnsdiago
   !
   ! initialise environment
   !
@@ -86,6 +86,7 @@ PROGRAM do_projwfc
 
   ef_0 = 0.d0
   lforcet = .false.
+  lnsdiago = .false.
 
 
   IF ( ionode )  THEN
@@ -125,6 +126,7 @@ PROGRAM do_projwfc
   CALL mp_bcast( irmax,     ionode_id, world_comm )
   CALL mp_bcast( ef_0, ionode_id, world_comm )
   CALL mp_bcast( lforcet, ionode_id, world_comm )
+  CALL mp_bcast( lnsdiago, ionode_id, world_comm )
 
 
   !
@@ -182,9 +184,9 @@ ELSE
         CALL projwave_nc(filproj, lsym, lwrite_overlaps, lbinary_data,ef_0)
      ELSE
         IF( nproc_ortho > 1 ) THEN
-           CALL pprojwave (filproj, lsym, lwrite_overlaps, lbinary_data )
+           CALL pprojwave (filproj, lsym, lwrite_overlaps, lbinary_data, lnsdiago )
         ELSE
-           CALL projwave (filproj, lsym, lwrite_overlaps, lbinary_data)
+           CALL projwave (filproj, lsym, lwrite_overlaps, lbinary_data, lnsdiago)
         ENDIF
      ENDIF
   ENDIF
@@ -248,7 +250,7 @@ SUBROUTINE get_et_from_gww ( nbnd, et )
 END SUBROUTINE get_et_from_gww
 !
 !-----------------------------------------------------------------------
-SUBROUTINE projwave( filproj, lsym, lwrite_ovp, lbinary )
+SUBROUTINE projwave( filproj, lsym, lwrite_ovp, lbinary, lnsdiago )
   !-----------------------------------------------------------------------
   !
   USE io_global, ONLY : stdout, ionode
@@ -276,7 +278,7 @@ SUBROUTINE projwave( filproj, lsym, lwrite_ovp, lbinary )
   IMPLICIT NONE
   !
   CHARACTER (len=*) :: filproj
-  LOGICAL           :: lwrite_ovp, lbinary
+  LOGICAL           :: lwrite_ovp, lbinary, lnsdiago
   !
   INTEGER :: npw, ik, ibnd, i, j, k, na, nb, nt, isym, n,  m, m1, l, nwfc,&
        nwfc1, lmax_wfc, is, iunproj
@@ -352,7 +354,11 @@ SUBROUTINE projwave( filproj, lsym, lwrite_ovp, lbinary )
      npw = ngk(ik)
      CALL davcio (evc, 2*nwordwfc, iunwfc, ik, - 1)
 
-     CALL atomic_wfc (ik, wfcatom)
+     IF ( .not. lnsdiago) THEN
+        CALL atomic_wfc (ik, wfcatom)
+     ELSE
+        CALL atomic_wfc_nsdiago (ik, wfcatom)
+     ENDIF
 
      CALL init_us_2 (npw, igk_k(1,ik), xk (1, ik), vkb)
      CALL calbec ( npw, vkb, wfcatom, becp)
@@ -1715,7 +1721,7 @@ END SUBROUTINE write_proj
 !  projwave with distributed matrixes
 !
 !-----------------------------------------------------------------------
-SUBROUTINE pprojwave( filproj, lsym, lwrite_ovp, lbinary )
+SUBROUTINE pprojwave( filproj, lsym, lwrite_ovp, lbinary, lnsdiago )
   !-----------------------------------------------------------------------
   !
   USE io_global, ONLY : stdout, ionode
@@ -1757,7 +1763,7 @@ SUBROUTINE pprojwave( filproj, lsym, lwrite_ovp, lbinary )
   COMPLEX(DP), PARAMETER :: one  = ( 1.0d0, 0.0d0 )
 
   CHARACTER (len=*) :: filproj
-  LOGICAL :: lwrite_ovp, lbinary
+  LOGICAL :: lwrite_ovp, lbinary, lnsdiago
   !
   INTEGER :: npw, ik, ibnd, i, j, na, nb, nt, isym, n,  m, m1, l, nwfc,&
        nwfc1, lmax_wfc, is, iunproj, iunaux
@@ -1865,7 +1871,11 @@ SUBROUTINE pprojwave( filproj, lsym, lwrite_ovp, lbinary )
      npw = ngk(ik)
      CALL davcio (evc, 2*nwordwfc, iunwfc, ik, - 1)
 
-     CALL atomic_wfc (ik, wfcatom)
+     IF ( .not. lnsdiago) THEN
+        CALL atomic_wfc (ik, wfcatom)
+     ELSE
+        CALL atomic_wfc_nsdiago (ik, wfcatom)
+     ENDIF
 
      CALL init_us_2 (npw, igk_k(1,ik), xk (1, ik), vkb)
 
